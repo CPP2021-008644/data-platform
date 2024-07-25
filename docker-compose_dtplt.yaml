@@ -1,0 +1,187 @@
+x-airflow-common:
+  # In order to add custom dependencies or upgrade provider packages you can use your extended image.
+  # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
+  # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
+  # image: apache/airflow:latest-python3.8
+
+  &airflow-common
+  build:
+    context: ./
+    dockerfile: ./airflow/airflow.Dockerfile
+  image: registry.arfima.com/project-x/project-x-platform:latest
+  environment:
+
+    # PG
+    &airflow-common-env
+    PGSERVICEFILE: /var/run/secrets/pgser
+
+
+  env_file:
+    - ./secrets/airflow/.env
+
+  volumes:
+    # Add all the needed folders in airflow
+    - ../dags/dags:/home/airflow/sources/dags
+    - ../dags/working:/home/airflow/sources/working
+    # - ./secrets/airflow/webserver_config.py:/opt/airflow/webserver_config.py
+    - airflow_logs:/home/airflow/sources/logs
+    - airflow_plugins:/home/airflow/sources/plugins
+    - airflow_tmp_store:/home/airflow/sources/tmp_store
+    - /home/docker/rawdata:/home/airflow/sources/rawdata
+    - /var/run/docker.sock:/var/run/docker.sock  # Share Docker socket
+
+  networks:
+    - dtpltbase_dtplt
+
+  secrets:
+    - source: pgser
+
+  depends_on: &airflow-common-depends-on
+    redis:
+      condition: service_healthy
+
+name: 'dtplt'
+services:
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "--fail",
+          "http://localhost:8080/virevent/health"
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW_COMMAND: "webserver"
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+    ports:
+      - 8080:8080
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'gosu airflow airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"'
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW_COMMAND: "scheduler"
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+
+  airflow-worker:
+    <<: *airflow-common
+    container_name: airflow-worker
+
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'gosu airflow celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW_COMMAND: "celery worker"
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+
+    ports:
+      - 5688:5678
+
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: airflow-triggerer
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'gosu airflow airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"'
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW_COMMAND: "triggerer"
+    restart: always
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    networks:
+      - dtpltbase_dtplt
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 30s
+      retries: 50
+    restart: always
+
+  kafka:
+    image: 'bitnami/kafka:3.5.2-debian-12-r23'
+    ports:
+      - '9092:9092'
+    environment:
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@127.0.0.1:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LOG_RETENTION_BYTES=536900000
+      - KAFKA_CFG_LOG_RETENTION_HOURS=72
+      - KAFKA_CFG_LOG_SEGMENT_BYTES=5369000
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_NUM_PARTITIONS=100
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_ENABLE_KRAFT=yes
+      - KAFKA_KRAFT_CLUSTER_ID=q2a8cDd9V02e-uvQSQeLqg==
+      - KAFKA_CFG_MESSAGE_MAX_BYTES=51380224
+      - KAFKA_CFG_REPLICA_FETCH_MAX_BYTES=52428800
+    restart: always
+    volumes:
+      - "kafka_data:/bitnami"
+    networks:
+      - dtpltbase_dtplt
+
+
+networks:
+  dtpltbase_dtplt:
+    external: true
+
+secrets:
+  pgser:
+    file: ./secrets/postgres/dtpltpgs
+
+volumes:
+  airflow_logs:
+    driver: local
+  airflow_plugins:
+    driver: local
+  airflow_tmp_store:
+    driver: local
+  kafka_data:
+    driver: local
+  redis_data:
+    driver: local
