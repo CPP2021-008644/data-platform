@@ -1,0 +1,87 @@
+name: 'prxbase'
+services:
+  postgres:
+    container_name: pgdb
+    image: timescale/timescaledb-ha:pg16.3-ts2.15.3
+
+    environment:
+      POSTGRES_DB: projectx
+      POSTGRES_USER: dbadmn
+      POSTGRES_PASSWORD_FILE: /var/run/secrets/pgps
+      TS_TUNE_MAX_CONNS: 400
+      TIMESCALEDB_TELEMETRY: off
+      TS_TUNE_MEMORY: 24GB
+      TS_TUNE_CPUS: 8
+      TS_TUNE_WAL_DISK_SIZE: 27GB
+
+    volumes:
+      - prxpg:/home/postgres/pgdata
+          # This has to have a name that sorts before 001_timescaledb_tune.sh
+          # because that script ends runnning timescaledb-tune, 
+          # which will restart postgres and no more init scripts will be run after
+      - ./pg/dbinit.sh:/docker-entrypoint-initdb.d/000_zBaseInit.sh
+       # As an example we will add the schema from osc-physrisk-metadata. (LICENSE Apache-2.0)
+      - "./pg/osc-physrisk-metadata/src/sql/DDL Create PhysRisk Database.sql:/tmp/base"
+      - "./pg/osc-physrisk-metadata/src/sql/PhysRisk Database seed data.sql:/tmp/basedata"
+      - ./pg/backfill.sql:/tmp/backfill
+      - ./pg/001_timescaledb_tune.sh:/docker-entrypoint-initdb.d/001_timescaledb_tune.sh
+
+    networks:
+      - prx
+
+    restart: always
+
+    ports:
+      - "25432:5432"
+
+    secrets:
+      - source: pg
+        target: pgps
+      - source: pgauth
+        target: auth
+      - source: pgairflow
+        target: airflow
+
+  minio:
+    container_name: mini
+    image: bitnami/minio:2024.7.16-debian-12-r2
+
+    volumes:
+      - prxminio:/bitnami/minio/data
+
+    secrets:
+      - source: prxminitial
+        target: minitial
+
+    networks:
+      - prx
+
+    restart: always
+
+    env_file:
+      - ./secrets/minio/.envminio_firstrun
+
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+networks:
+  prx:
+   driver: bridge
+
+secrets:
+  pg:
+    file: ./secrets/postgres/prxpgfile
+  pgauth:
+    file: ./secrets/postgres/prxauth.sql
+  pgairflow:
+    file: ./secrets/postgres/prxairflow.sql
+  prxminitial:
+    file: ./secrets/minio/initial.sh
+
+
+volumes:
+  prxpg:
+    driver: local
+  prxminio:
+    driver: local

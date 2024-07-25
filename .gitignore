@@ -1,0 +1,6 @@
+## Ignore secrets
+
+secrets/*
+
+# # vscode
+.vscode
